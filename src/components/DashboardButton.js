@@ -1,15 +1,7 @@
-import React from 'react';
-
-const DashboardButton = ({ onClick, label = 'Go to Dashboard', variant = 'primary' }) => {
+export function DashboardButton() {
   return (
-    <button 
-      className={`dashboard-button dashboard-button-${variant}`}
-      onClick={onClick}
-    >
-      {label}
-    </button>
+      <button className="dashboard-btn">
+          Go to Dashboard →
+      </button>
   );
-};
-
-export default DashboardButton;
-
+}

@@ -1,13 +1,8 @@
-import React from 'react';
-
-const NewFeature = () => {
+export function NewFeature() {
   return (
-    <div className="new-feature">
-      <h2>New Feature</h2>
-      <p>This is a new feature component.</p>
-    </div>
+      <div className="new-feature">
+          <h2>New Feature</h2>
+          <p>This feature was recently added.</p>
+      </div>
   );
-};
-
-export default NewFeature;
-
+}
