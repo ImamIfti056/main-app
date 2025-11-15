@@ -53,18 +53,7 @@ jobs:
       - name: Generate patched files via OpenAI
         id: llm-patch
         run: |
-          PROMPT=$(cat <<EOF
-          You are a coding assistant.
-          You have the diff of main-app in 'main_changes.diff' and the full demo-app source.
-          Task:
-          1. Apply only the diff changes to demo-app files.
-          2. Preserve intentional demo differences marked with:
-             /* DEMO-INTENTIONAL-START */ ... /* DEMO-INTENTIONAL-END */
-          3. Do not modify files matching ignore list: ${{ env.IGNORE_PATHS }}
-          4. Output JSON in this format:
-             { "files": [ { "path": "<relative-path>", "new_content": "<updated content>", "note": "<optional note>" } ] }
-          EOF
-          )
+          pip install openai jq
 
           python3 - <<PY
           import os, openai, json
@@ -74,7 +63,20 @@ jobs:
           with open("main_changes.diff", "r") as f:
               diff_text = f.read()
           
-          prompt = f"""{PROMPT}\n\nDiff:\n{diff_text}"""
+          prompt = f"""
+          You are a coding assistant.
+          You have the diff of main-app in 'main_changes.diff' and the full demo-app source.
+          Task:
+          1. Apply only the diff changes to demo-app files.
+          2. Preserve intentional demo differences marked with:
+             /* DEMO-INTENTIONAL-START */ ... /* DEMO-INTENTIONAL-END */
+          3. Do not modify files matching ignore list: {os.environ['IGNORE_PATHS']}
+          4. Output JSON in this format:
+             {{ 'files': [ {{ 'path': '<relative-path>', 'new_content': '<updated content>', 'note': '<optional note>' }} ] }}
+          
+          Diff:
+          {diff_text}
+          """
           
           resp = openai.ChatCompletion.create(
               model="gpt-4.1-mini",
@@ -84,14 +86,12 @@ jobs:
               ],
               temperature=0
           )
-
-          # Get the model output
+          
           result = resp.choices[0].message.content
           
           with open("llm_output.json", "w") as f:
               f.write(result)
           PY
-
       # Step 6: Apply patches
       - name: Apply patched files
         run: |
