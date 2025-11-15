@@ -51,16 +51,15 @@ jobs:
           pip install openai jq
 
       # Step 5: Call OpenAI to generate patched files (new 1.x API)
-      - name: Generate patched files via OpenAI
+      - name: Generate patched files via Vercel AI
         run: |
           python3 - <<PY
-          import os, json
-          from openai import OpenAI
+          import os, json, requests
           
-          client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+          VERCEL_AI_URL = "https://vite-react-alpha-two-2rwal6v0ex.vercel.app/api/ai"
           
           with open("main_changes.diff", "r") as f:
-              diff_text = f.read()
+            diff_text = f.read()
           
           prompt = f"""
           You are a coding assistant.
@@ -68,29 +67,32 @@ jobs:
           Task:
           1. Apply only the diff changes to demo-app files.
           2. Preserve intentional demo differences marked with:
-             /* DEMO-INTENTIONAL-START */ ... /* DEMO-INTENTIONAL-END */
+           /* DEMO-INTENTIONAL-START */ ... /* DEMO-INTENTIONAL-END */
           3. Do not modify files matching ignore list: {os.environ['IGNORE_PATHS']}
           4. Output JSON in this format:
-             {{ "files": [ {{ "path": "<relative-path>", "new_content": "<updated content>", "note": "<optional note>" }} ] }}
+           {{ "files": [ {{ "path": "<relative-path>", "new_content": "<updated content>", "note": "<optional note>" }} ] }}
           
           Diff:
           {diff_text}
           """
           
-          resp = client.chat.completions.create(
-              model="gpt-3.5-turbo",
-              messages=[
-                  {"role": "system", "content": "You are a skilled coding assistant."},
-                  {"role": "user", "content": prompt}
-              ],
-              temperature=0
-          )
+          payload = {
+            "messages": [
+                {"role": "system", "content": "You are a skilled coding assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            "model": "gpt-4.1-mini"
+          }
           
-          result = resp.choices[0].message.content
+          resp = requests.post(VERCEL_AI_URL, json=payload)
+          resp.raise_for_status()
+          
+          result = resp.json()["choices"][0]["message"]["content"]
           
           with open("llm_output.json", "w") as f:
-              f.write(result)
+            f.write(result)
           PY
+
 
       # Step 6: Apply patched files to demo-app
       - name: Apply patched files
