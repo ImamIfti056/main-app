@@ -6,6 +6,7 @@ export function Navbar() {
               <li>Dashboard</li>
               <li>Projects</li>
               <li>Settings</li>
+              <li>Logout</li>
           </ul>
       </nav>
   );
