@@ -15,12 +15,12 @@ jobs:
       IGNORE_PATHS: "src/pages/**,src/demo-specific/**"
 
     steps:
-      # Step 1: Checkout main-app
+      # Step 1: Checkout main-app (full history to avoid diff errors)
       - name: Checkout main-app
         uses: actions/checkout@v4
         with:
           path: main-app
-          fetch-depth: 0 #fetches full commit history
+          fetch-depth: 0
 
       # Step 2: Checkout demo-app
       - name: Checkout demo-app
@@ -29,16 +29,17 @@ jobs:
           repository: ImamIfti056/demo-app
           token: ${{ secrets.DEMO_REPO_TOKEN }}
           path: demo-app
+          fetch-depth: 0
 
-      # Step 3: Generate diff
+      # Step 3: Generate main changes diff
       - name: Generate main changes diff
-        id: generate-diff
         run: |
-          git --git-dir=main-app/.git fetch origin main
-          git --git-dir=main-app/.git diff --unified=0 ${{ github.event.before }} ${{ github.event.after }} > main_changes.diff
-          cat main_changes.diff
+          cd main-app
+          git fetch origin main
+          git diff origin/main^..origin/main --unified=0 > ../main_changes.diff
+          cat ../main_changes.diff
 
-      # Step 4: Install Python and dependencies
+      # Step 4: Setup Python and install dependencies
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
@@ -49,21 +50,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install openai jq
 
-      # Step 5: Call OpenAI to generate patched files
+      # Step 5: Call OpenAI to generate patched files (new 1.x API)
       - name: Generate patched files via OpenAI
-        id: llm-patch
         run: |
-          pip install openai jq
-
           python3 - <<PY
-          import os, openai, json
+          import os, json
+          from openai import OpenAI
           
-          openai.api_key = os.environ["OPENAI_API_KEY"]
+          client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
           
           with open("main_changes.diff", "r") as f:
               diff_text = f.read()
           
-          prompt = f"""
+          prompt = f\"\"\"
           You are a coding assistant.
           You have the diff of main-app in 'main_changes.diff' and the full demo-app source.
           Task:
@@ -72,13 +71,13 @@ jobs:
              /* DEMO-INTENTIONAL-START */ ... /* DEMO-INTENTIONAL-END */
           3. Do not modify files matching ignore list: {os.environ['IGNORE_PATHS']}
           4. Output JSON in this format:
-             {{ 'files': [ {{ 'path': '<relative-path>', 'new_content': '<updated content>', 'note': '<optional note>' }} ] }}
+             {{ "files": [ {{ "path": "<relative-path>", "new_content": "<updated content>", "note": "<optional note>" }} ] }}
           
           Diff:
           {diff_text}
-          """
+          \"\"\"
           
-          resp = openai.ChatCompletion.create(
+          resp = client.chat.completions.create(
               model="gpt-4.1-mini",
               messages=[
                   {"role": "system", "content": "You are a skilled coding assistant."},
@@ -92,10 +91,10 @@ jobs:
           with open("llm_output.json", "w") as f:
               f.write(result)
           PY
-      # Step 6: Apply patches
+
+      # Step 6: Apply patched files to demo-app
       - name: Apply patched files
         run: |
-          mkdir -p temp
           cat llm_output.json | jq -c '.files[]' | while read file; do
             path=$(echo "$file" | jq -r '.path')
             content=$(echo "$file" | jq -r '.new_content')
@@ -111,6 +110,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b sync/llm-auto-${GITHUB_RUN_ID}
           git add .
+          # Only commit if changes exist
           git diff --cached --quiet || git commit -m "chore(sync): LLM auto-sync from main-app (${GITHUB_SHA::7})"
 
       # Step 8: Push branch
@@ -119,7 +119,7 @@ jobs:
           cd demo-app
           git push origin HEAD
 
-      # Step 9: Create PR
+      # Step 9: Create Pull Request
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
