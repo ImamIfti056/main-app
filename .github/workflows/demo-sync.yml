@@ -48,7 +48,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install openai jq
+          pip install requests openai jq
 
       # Step 5: Call OpenAI to generate patched files (new 1.x API)
       - name: Generate patched files via Vercel AI
