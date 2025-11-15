@@ -28,7 +28,7 @@ jobs:
       - name: Checkout demo-app
         uses: actions/checkout@v4
         with:
-          repository: your-org/demo-app
+          repository: ImamIfti056/demo-app
           token: ${{ secrets.DEMO_REPO_TOKEN }}
           path: demo-app
 
