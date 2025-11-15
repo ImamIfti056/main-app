@@ -62,7 +62,7 @@ jobs:
           with open("main_changes.diff", "r") as f:
               diff_text = f.read()
           
-          prompt = f\"\"\"
+          prompt = f"""
           You are a coding assistant.
           You have the diff of main-app in 'main_changes.diff' and the full demo-app source.
           Task:
@@ -75,7 +75,7 @@ jobs:
           
           Diff:
           {diff_text}
-          \"\"\"
+          """
           
           resp = client.chat.completions.create(
               model="gpt-4.1-mini",
