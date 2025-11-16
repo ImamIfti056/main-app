@@ -4,6 +4,18 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      force_sync:
+        description: 'Force sync even if no changes detected'
+        required: false
+        type: boolean
+        default: false
+      skip_validation:
+        description: 'Skip validation checks'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   sync-demo:
@@ -12,17 +24,20 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      issues: write
 
     env:
       DEMO_REPO_TOKEN: ${{ secrets.DEMO_REPO_TOKEN }}
-      IGNORE_PATHS: "src/pages/**,src/demo-specific/**"
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      # Step 1: Checkout main-app
+      # Step 1: Checkout main-app with full history
       - name: Checkout main-app
         uses: actions/checkout@v4
         with:
           path: main-app
+          fetch-depth: 0  # Full history for better diff analysis
 
       # Step 2: Checkout demo-app
       - name: Checkout demo-app
@@ -31,198 +46,153 @@ jobs:
           repository: ImamIfti056/demo-app
           token: ${{ secrets.DEMO_REPO_TOKEN }}
           path: demo-app
+          fetch-depth: 0
 
-      # Step 3: Generate surgical diff of changed lines only
-      - name: Generate main changes diff
-        id: generate-diff
+      # Step 3: Setup Node.js for Copilot sync script
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # Step 4: Install dependencies for sync script
+      - name: Install sync script dependencies
         run: |
           cd main-app
-          # Fetch full history including all commits and tags
-          git fetch --deepen=999999 origin main || git fetch origin main
-          
-          # Use HEAD and HEAD~1 (last two commits)
-          BEFORE="HEAD~1"
-          AFTER="HEAD"
-          
-          echo "--- DIFF DEBUG ---"
-          echo "BEFORE: $BEFORE"
-          echo "AFTER:  $AFTER"
-          echo "Total commits on main:"
-          git rev-list --count origin/main
-          echo "Commit info for BEFORE:"
-          git show --no-patch --format="%H %ci %s" $BEFORE 2>/dev/null || echo "(BEFORE unavailable)"
-          echo "Commit info for AFTER:"
-          git show --no-patch --format="%H %ci %s" $AFTER 2>/dev/null || echo "(AFTER unavailable)"
+          npm install js-yaml --no-save
 
-          # Limit the diff to source files only to avoid applying workflow or config files
-          git diff "$BEFORE" "$AFTER" --unified=0 -- src > ../main_changes.diff || true
-          git diff --name-only "$BEFORE" "$AFTER" -- src > ../main_changed_files.txt || true
-          echo "Changed files (limited to src/):"
-          cat ../main_changed_files.txt || true
-          echo "Diff between $BEFORE and $AFTER (src/):"
-          cat ../main_changes.diff || true
-          echo "--- END DIFF DEBUG ---"
+      # Step 4: Install dependencies for sync script
+      - name: Install sync script dependencies
+        run: |
+          cd main-app
+          npm install js-yaml --no-save
 
-      # Step 4: Apply changes to demo-app using git apply
-      - name: Apply changes to demo-app
-        id: apply-changes
+      # Step 5: Run Copilot-powered sync orchestrator
+      - name: Run intelligent sync with Copilot
+        id: copilot-sync
+        env:
+          MAIN_APP_PATH: ${{ github.workspace }}/main-app
+          DEMO_APP_PATH: ${{ github.workspace }}/demo-app
+        run: |
+          cd main-app
+          node .github/scripts/copilot-sync.js
+          
+          # Check if sync produced results
+          if [ -f sync-results.json ]; then
+            echo "✅ Sync completed"
+            cat sync-results.json
+          else
+            echo "❌ Sync failed - no results file"
+            exit 1
+          fi
+
+      # Step 6: Check if changes were made
+      - name: Check for changes
+        id: check-changes
         run: |
           cd demo-app
-          # Check if diff file has content
-          if [ ! -s ../main_changes.diff ]; then
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "changes_made=true" >> $GITHUB_OUTPUT
+            echo "✅ Changes detected in demo-app"
+          else
             echo "changes_made=false" >> $GITHUB_OUTPUT
-            echo "ℹ No changes to apply (branches are identical)"
-            exit 0
-          fi
-          
-          echo "changes_made=true" >> $GITHUB_OUTPUT
-          
-          # Get list of new files (added) from main-app
-          NEW_FILES=$(cd ../main-app && git diff HEAD~1 HEAD --name-only --diff-filter=A -- src 2>/dev/null || true)
-          
-          if [ ! -z "$NEW_FILES" ]; then
-            echo "📄 New files detected:"
-            echo "$NEW_FILES"
-            # Copy new files from main-app to demo-app
-            for FILE in $NEW_FILES; do
-              mkdir -p "$(dirname "$FILE")"
-              cp "../main-app/$FILE" "$FILE"
-              echo "  ✓ Copied $FILE"
-            done
-          fi
-          
-          # Get list of modified files (exclude new files) from main-app
-          MODIFIED_FILES=$(cd ../main-app && git diff HEAD~1 HEAD --name-only --diff-filter=M -- src 2>/dev/null || true)
-          
-          if [ ! -z "$MODIFIED_FILES" ]; then
-            echo "✏️ Modified files detected:"
-            echo "$MODIFIED_FILES"
-            
-            # For each modified file, copy the latest version from main-app into demo-app,
-            # but preserve any INTENTIONAL-START/END blocks from the existing demo file.
-            for FILE in $MODIFIED_FILES; do
-              echo "⟳ Syncing modified file: $FILE"
-
-              HAS_INTENTIONAL=false
-              if [ -f "$FILE" ] && grep -q 'INTENTIONAL-START' "$FILE"; then
-                HAS_INTENTIONAL=true
-                mkdir -p "../demo-app_backups/$(dirname "$FILE")"
-                cp "$FILE" "../demo-app_backups/$FILE"
-              fi
-
-              # Copy latest file contents from main-app
-              mkdir -p "$(dirname "$FILE")"
-              cp "../main-app/$FILE" "$FILE"
-
-              # If there was an intentional block in the original demo file, restore it
-              if [ "$HAS_INTENTIONAL" = true ]; then
-                BACKUP="../demo-app_backups/$FILE"
-                if [ -f "$BACKUP" ]; then
-                  TARGET_FILE="$FILE" BACKUP_FILE="$BACKUP" python - << 'PY'
-                  import os
-
-                  file_path = os.environ["TARGET_FILE"]
-                  backup_path = os.environ["BACKUP_FILE"]
-
-                  with open(file_path, "r", encoding="utf-8") as f:
-                      new_lines = f.readlines()
-
-                  with open(backup_path, "r", encoding="utf-8") as f:
-                      orig_lines = f.readlines()
-
-
-                  def restore_blocks(new, orig):
-                      result = []
-                      i_new = 0
-                      i_orig = 0
-                      n_new = len(new)
-                      n_orig = len(orig)
-
-                      while i_new < n_new:
-                          line_new = new[i_new]
-                          if "INTENTIONAL-START" in line_new:
-                              # Find corresponding block in original file
-                              start_o = None
-                              for j in range(i_orig, n_orig):
-                                  if "INTENTIONAL-START" in orig[j]:
-                                      start_o = j
-                                      break
-
-                              if start_o is None:
-                                  # No corresponding block in original; keep new block as-is
-                                  result.append(line_new)
-                                  i_new += 1
-                                  continue
-
-                              # Collect original block (from START to END inclusive)
-                              block = []
-                              k = start_o
-                              while k < n_orig:
-                                  block.append(orig[k])
-                                  if "INTENTIONAL-END" in orig[k]:
-                                      k += 1
-                                      break
-                                  k += 1
-
-                              # Append original block to result
-                              result.extend(block)
-                              i_orig = k
-
-                              # Skip corresponding block in new file
-                              i_new += 1
-                              while i_new < n_new:
-                                  if "INTENTIONAL-END" in new[i_new]:
-                                      i_new += 1
-                                      break
-                                  i_new += 1
-                          else:
-                              result.append(line_new)
-                              i_new += 1
-
-                      return result
-
-
-                  restored = restore_blocks(new_lines, orig_lines)
-
-                  with open(file_path, "w", encoding="utf-8") as f:
-                      f.writelines(restored)
-          PY
-                fi
-              fi
-            done
+            echo "ℹ️  No changes to commit"
           fi
 
-      # Step 5: Commit changes to new branch in demo-app
+      # Step 7: Commit changes to new branch in demo-app
       - name: Commit changes
-        if: steps.apply-changes.outputs.changes_made == 'true'
+        if: steps.check-changes.outputs.changes_made == 'true'
         run: |
           cd demo-app
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b sync/auto-${GITHUB_RUN_ID}
+          
+          # Create new branch for sync
+          BRANCH_NAME="sync/copilot-${GITHUB_RUN_ID}"
+          git checkout -b "$BRANCH_NAME"
+          
+          # Stage all changes
           git add .
-          git commit -m "chore(sync): Auto-sync from main-app (${GITHUB_SHA::7})" || echo "No changes to commit"
+          
+          # Commit with detailed message
+          git commit -m "chore(sync): AI-powered sync from main-app
 
-      # Step 6: Push branch to demo-app
+Main commit: ${GITHUB_SHA::7}
+Workflow: ${GITHUB_RUN_ID}
+
+This commit was automatically generated by the Copilot-powered sync workflow.
+Review the PR description for detailed changes and validation results." || echo "No changes to commit"
+
+      # Step 8: Push branch to demo-app
       - name: Push branch
-        if: steps.apply-changes.outputs.changes_made == 'true'
+        if: steps.check-changes.outputs.changes_made == 'true'
         run: |
           cd demo-app
-          git push origin HEAD
+          BRANCH_NAME="sync/copilot-${GITHUB_RUN_ID}"
+          git push origin "$BRANCH_NAME"
 
-      # Step 7: Create Pull Request
+      # Step 9: Create Pull Request with AI-generated description
       - name: Create Pull Request
-        if: steps.apply-changes.outputs.changes_made == 'true'
+        if: steps.check-changes.outputs.changes_made == 'true'
         env:
           GH_TOKEN: ${{ secrets.DEMO_REPO_TOKEN }}
         run: |
           cd demo-app
-          gh pr create \
-            --title "chore(sync): Automated Demo Sync" \
-            --body "This PR was automatically generated to sync demo-app with main-app.
           
-          Main commit: ${{ github.sha }}
-          - Applied changes from main-app
-          - Files in ignore list skipped" \
-            --base main \
-            --head sync/auto-${GITHUB_RUN_ID}
+          # Read PR description from file
+          PR_BODY=""
+          if [ -f ../main-app/pr-description.md ]; then
+            PR_BODY=$(cat ../main-app/pr-description.md)
+          else
+            PR_BODY="Automated sync from main-app (${GITHUB_SHA::7})"
+          fi
+          
+          # Create PR targeting dev branch
+          gh pr create \
+            --title "🤖 [Auto-Sync] Demo sync from main-app (${GITHUB_SHA::7})" \
+            --body "$PR_BODY" \
+            --base dev \
+            --head "sync/copilot-${GITHUB_RUN_ID}" \
+            --label "automated-sync,demo-sync,needs-review"
+
+      # Step 10: Create issue on failure
+      - name: Create issue on sync failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.DEMO_REPO_TOKEN }}
+        run: |
+          cd demo-app
+          
+          gh issue create \
+            --title "🚨 Demo sync failed - Run #${GITHUB_RUN_ID}" \
+            --body "The automated demo sync workflow failed.
+
+**Main app commit**: ${GITHUB_SHA}
+**Workflow run**: [#${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
+**Branch**: main
+
+Please review the workflow logs and fix any issues.
+
+/cc @demo-team" \
+            --label "sync-failure,automated"
+
+      # Step 11: Job summary
+      - name: Generate job summary
+        if: always()
+        run: |
+          cd main-app
+          
+          echo "# 🤖 Copilot-Powered Demo Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f sync-results.json ]; then
+            echo "## Results" >> $GITHUB_STEP_SUMMARY
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            cat sync-results.json >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ No sync results available" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Workflow**: [Run #${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})" >> $GITHUB_STEP_SUMMARY
+          echo "**Main commit**: \`${GITHUB_SHA::7}\`" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,219 @@
+# Demo Sync Configuration
+# This file controls how changes from main-app are synchronized to demo-app
+
+# Version of this config schema
+version: 1.0
+
+# Files and paths to completely ignore during sync
+# These files will NEVER be copied or modified in demo-app
+ignore_patterns:
+  # Demo-specific pages and routes
+  - "src/pages/demo/**"
+  - "src/pages/demo-login.html"
+  - "src/pages/demo-welcome.html"
+  
+  # Demo-specific configuration
+  - "src/config/demo-config.js"
+  - "src/config/mock-data.js"
+  - "src/constants/demo-constants.js"
+  
+  # Demo-specific utilities
+  - "src/utils/demo-helpers.js"
+  - "src/utils/mock-api.js"
+  
+  # Demo-specific components
+  - "src/components/DemoNotice.js"
+  - "src/components/DemoRestriction.js"
+  
+  # Build and deployment configs (demo has different settings)
+  - ".github/workflows/**"
+  - "*.config.js"
+  - "package.json"
+  - "package-lock.json"
+  - ".env*"
+  
+  # Documentation specific to demo
+  - "README.demo.md"
+  - "DEMO_SETUP.md"
+
+# Files that should use smart merge (copy with INTENTIONAL block preservation)
+# These files are mostly identical but have demo-specific sections marked with INTENTIONAL-START/END
+smart_merge_files:
+  # Components with disabled functionality
+  - "src/components/**/*.js"
+  - "src/components/**/*.jsx"
+  - "src/components/**/*.ts"
+  - "src/components/**/*.tsx"
+  
+  # Pages with demo modifications
+  - "src/pages/**/*.js"
+  - "src/pages/**/*.jsx"
+  - "src/pages/**/*.html"
+  
+  # Layouts with demo notices
+  - "src/layouts/**/*.js"
+  - "src/layouts/**/*.jsx"
+
+# Files that should be copied as-is (full replacement, no smart merge)
+# These files should be identical between main and demo
+full_copy_files:
+  # Pure CSS (usually no demo-specific changes)
+  - "src/styles/**/*.css"
+  - "src/styles/**/*.scss"
+  
+  # Shared utilities (business logic, no demo modifications)
+  - "src/utils/formatters.js"
+  - "src/utils/validators.js"
+  - "src/utils/constants.js"
+  
+  # Type definitions
+  - "src/types/**/*.ts"
+  - "src/types/**/*.d.ts"
+  
+  # Assets
+  - "src/assets/**"
+
+# Protected code block markers
+# Code between these markers will NEVER be overwritten during sync
+protected_blocks:
+  start_markers:
+    - "// INTENTIONAL-START"
+    - "<!-- INTENTIONAL-START -->"
+    - "/* INTENTIONAL-START */"
+    - "# INTENTIONAL-START"
+  
+  end_markers:
+    - "// INTENTIONAL-END"
+    - "<!-- INTENTIONAL-END -->"
+    - "/* INTENTIONAL-END */"
+    - "# INTENTIONAL-END"
+
+# AI-powered auto-detection patterns
+# Copilot will identify these patterns as likely demo-specific and preserve them
+auto_detect_patterns:
+  # Disabled functionality patterns
+  disabled_buttons:
+    - 'disabled={true}'
+    - 'disabled="true"'
+    - 'isDisabled={true}'
+    - 'readOnly={true}'
+  
+  # Mock data patterns
+  mock_data:
+    - 'mockData'
+    - 'dummyData'
+    - 'DEMO_DATA'
+    - 'sampleData'
+  
+  # Demo-specific conditions
+  demo_conditions:
+    - 'if (isDemo)'
+    - 'if (IS_DEMO)'
+    - 'isDemoMode'
+    - 'process.env.DEMO_MODE'
+  
+  # Demo API endpoints
+  demo_apis:
+    - '/api/demo/'
+    - '/mock-api/'
+    - 'demo.apploye.com'
+
+# Sync rules for specific file types
+file_type_rules:
+  javascript:
+    extensions: [".js", ".jsx"]
+    preserve_imports: true  # Keep demo-specific imports
+    preserve_exports: false  # Use main-app exports
+  
+  typescript:
+    extensions: [".ts", ".tsx"]
+    preserve_imports: true
+    preserve_exports: false
+  
+  html:
+    extensions: [".html"]
+    preserve_meta_tags: true  # Demo might have different SEO tags
+    preserve_scripts: false    # Use main-app scripts
+  
+  css:
+    extensions: [".css", ".scss", ".sass"]
+    full_replace: true  # CSS should be identical
+
+# Validation rules
+validation:
+  # Check for broken imports after sync
+  check_imports: true
+  
+  # Ensure INTENTIONAL blocks are properly closed
+  validate_protected_blocks: true
+  
+  # Verify syntax after changes
+  syntax_check: true
+  
+  # Fail sync if validation fails
+  fail_on_error: false  # Create PR with warnings instead
+
+# AI Configuration
+ai_config:
+  # Model to use for intelligent sync
+  model: "gpt-4"  # or "github-copilot" when available
+  
+  # Prompt temperature (0.0 = deterministic, 1.0 = creative)
+  temperature: 0.2
+  
+  # Maximum tokens for AI responses
+  max_tokens: 4000
+  
+  # Enable AI auto-detection of demo patterns
+  auto_detect_demo_code: true
+  
+  # Generate detailed PR descriptions
+  generate_pr_description: true
+  
+  # AI should suggest improvements to sync config
+  suggest_config_improvements: true
+
+# Notification settings
+notifications:
+  # Create GitHub issue on sync failure
+  create_issue_on_failure: true
+  
+  # Tag users in PR
+  tag_reviewers: ["@demo-team"]
+  
+  # Slack webhook for notifications (optional)
+  slack_webhook_secret: "SLACK_SYNC_WEBHOOK"  # GitHub secret name
+
+# Rollback configuration
+rollback:
+  # Keep backup of demo files before sync
+  create_backup: true
+  
+  # Number of sync backups to retain
+  backup_retention: 5
+  
+  # Enable rollback via PR comment
+  allow_comment_rollback: true
+
+# Advanced options
+advanced:
+  # Target branch in demo-app
+  target_branch: "dev"
+  
+  # PR label to apply
+  pr_labels: ["automated-sync", "demo-sync", "needs-review"]
+  
+  # Auto-merge if all checks pass
+  auto_merge: false
+  
+  # Enable draft PR mode
+  draft_pr: false
+  
+  # Diff strategy: "commit" (HEAD~1..HEAD) or "branch" (main..demo/main)
+  diff_strategy: "commit"
+  
+  # Include file deletions in sync
+  sync_deletions: true
+  
+  # Maximum file size to sync (bytes, 0 = unlimited)
+  max_file_size: 1048576  # 1MB
