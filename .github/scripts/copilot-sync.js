@@ -335,29 +335,30 @@ class CopilotSyncOrchestrator {
       return;
     }
 
-    // Check if main-app also has protected block markers
-    const startMarkers = this.config.protected_blocks.start_markers;
-    const hasMarkersInMain = startMarkers.some(marker => mainContent.includes(marker));
-
-    if (!hasMarkersInMain) {
-      // Main doesn't have protected blocks, meaning main-app dev removed them
-      // Use main content as-is (don't preserve demo blocks)
-      fs.writeFileSync(demoPath, mainContent);
-      console.log(`   ✓ Smart merge (blocks removed from main, using main content): ${file}`);
-      this.syncLog.push({ action: 'smart_merge_blocks_removed', file });
-      return;
-    }
-
-    // Both have protected blocks, merge them
-    const mergedContent = this.mergeWithProtectedBlocks(mainContent, protectedBlocks);
+    // Demo has protected blocks - merge intelligently
+    // Strategy: Insert demo's protected blocks into main's content at appropriate positions
+    const mergedContent = this.intelligentMerge(mainContent, demoContent, protectedBlocks, file);
     
-    fs.writeFileSync(demoPath, mergedContent);
-    console.log(`   ✓ Smart merge (${protectedBlocks.length} blocks preserved): ${file}`);
-    this.syncLog.push({
-      action: 'smart_merge',
-      file,
-      blocks_preserved: protectedBlocks.length
-    });
+    fs.writeFileSync(demoPath, mergedContent.content);
+    
+    if (mergedContent.warnings.length > 0) {
+      console.log(`   ⚠️  Smart merge with warnings (${protectedBlocks.length} blocks): ${file}`);
+      this.syncLog.push({
+        action: 'smart_merge_with_warnings',
+        file,
+        blocks_preserved: protectedBlocks.length,
+        warnings: mergedContent.warnings
+      });
+      this.changes.conflicts.push({ file, warnings: mergedContent.warnings });
+    } else {
+      console.log(`   ✓ Smart merge (${protectedBlocks.length} blocks preserved): ${file}`);
+      this.syncLog.push({
+        action: 'smart_merge',
+        file,
+        blocks_preserved: protectedBlocks.length
+      });
+    }
+    
     this.changes.preserved.push({ file, blocks: protectedBlocks.length });
   }
 
@@ -400,7 +401,171 @@ class CopilotSyncOrchestrator {
   }
 
   /**
-   * Merge main content with protected blocks from demo
+   * Intelligent merge: preserve demo's protected blocks while updating from main
+   */
+  intelligentMerge(mainContent, demoContent, protectedBlocks, file) {
+    const mainLines = mainContent.split('\n');
+    const demoLines = demoContent.split('\n');
+    const startMarkers = this.config.protected_blocks.start_markers;
+    const endMarkers = this.config.protected_blocks.end_markers;
+    
+    const warnings = [];
+    let result = [...mainLines]; // Start with main content
+    
+    // For each protected block in demo, find where to insert it in main
+    for (const block of protectedBlocks) {
+      // Get context around the block (lines before and after)
+      const contextBefore = this.getContextBefore(demoLines, block.start, 3);
+      const contextAfter = this.getContextAfter(demoLines, block.end, 3);
+      
+      // Try to find matching context in main
+      const insertPosition = this.findInsertPosition(result, contextBefore, contextAfter);
+      
+      if (insertPosition !== -1) {
+        // Found matching context - insert protected block
+        const blockLines = block.content.split('\n');
+        
+        // Calculate how many lines to replace (between context before and after)
+        const replaceStart = insertPosition;
+        const replaceEnd = this.findContextAfterPosition(result, contextAfter, replaceStart);
+        
+        if (replaceEnd !== -1) {
+          // Replace the section with protected block
+          result.splice(replaceStart, replaceEnd - replaceStart, ...blockLines);
+        } else {
+          // Just insert the block
+          result.splice(insertPosition, 0, ...blockLines);
+        }
+      } else {
+        // Could not find matching context - main removed this section
+        warnings.push({
+          type: 'protected_block_context_missing',
+          message: `Protected block at lines ${block.start}-${block.end} has no matching context in main-app. Main may have removed this section.`,
+          block: block.content.substring(0, 100) + '...'
+        });
+        
+        // Still try to preserve by appending at the end with a warning comment
+        result.push('');
+        result.push('// ⚠️ WARNING: This block was preserved but context not found in main-app');
+        result.push(...block.content.split('\n'));
+      }
+    }
+    
+    return {
+      content: result.join('\n'),
+      warnings
+    };
+  }
+  
+  /**
+   * Get context lines before a position
+   */
+  getContextBefore(lines, position, count) {
+    const start = Math.max(0, position - count);
+    const contextLines = [];
+    
+    for (let i = start; i < position; i++) {
+      const line = lines[i].trim();
+      // Skip empty lines and marker lines
+      if (line && !this.isMarkerLine(line)) {
+        contextLines.push(line);
+      }
+    }
+    
+    return contextLines;
+  }
+  
+  /**
+   * Get context lines after a position
+   */
+  getContextAfter(lines, position, count) {
+    const end = Math.min(lines.length, position + count + 1);
+    const contextLines = [];
+    
+    for (let i = position + 1; i < end; i++) {
+      const line = lines[i].trim();
+      // Skip empty lines and marker lines
+      if (line && !this.isMarkerLine(line)) {
+        contextLines.push(line);
+      }
+    }
+    
+    return contextLines;
+  }
+  
+  /**
+   * Check if line is a marker line
+   */
+  isMarkerLine(line) {
+    const allMarkers = [
+      ...this.config.protected_blocks.start_markers,
+      ...this.config.protected_blocks.end_markers
+    ];
+    return allMarkers.some(marker => line.includes(marker));
+  }
+  
+  /**
+   * Find insertion position based on context
+   */
+  findInsertPosition(lines, contextBefore, contextAfter) {
+    // Look for matching context before
+    for (let i = 0; i < lines.length; i++) {
+      if (this.matchesContext(lines, i, contextBefore, true)) {
+        // Found context before, verify context after exists nearby
+        const afterPos = i + contextBefore.length;
+        if (afterPos < lines.length) {
+          return afterPos;
+        }
+      }
+    }
+    
+    return -1;
+  }
+  
+  /**
+   * Find position of context after
+   */
+  findContextAfterPosition(lines, contextAfter, startFrom) {
+    for (let i = startFrom; i < Math.min(lines.length, startFrom + 20); i++) {
+      if (this.matchesContext(lines, i, contextAfter, false)) {
+        return i;
+      }
+    }
+    return -1;
+  }
+  
+  /**
+   * Check if lines match context
+   */
+  matchesContext(lines, startPos, context, skipEmpty = true) {
+    let lineIdx = startPos;
+    let contextIdx = 0;
+    
+    while (contextIdx < context.length && lineIdx < lines.length) {
+      const line = lines[lineIdx].trim();
+      
+      if (skipEmpty && !line) {
+        lineIdx++;
+        continue;
+      }
+      
+      if (line === context[contextIdx]) {
+        contextIdx++;
+      } else if (line.includes(context[contextIdx]) || context[contextIdx].includes(line)) {
+        // Partial match also acceptable
+        contextIdx++;
+      } else {
+        return false;
+      }
+      
+      lineIdx++;
+    }
+    
+    return contextIdx === context.length;
+  }
+
+  /**
+   * Merge main content with protected blocks from demo (DEPRECATED - kept for backward compatibility)
    */
   mergeWithProtectedBlocks(mainContent, protectedBlocks) {
     // Both main and demo have protected blocks
@@ -571,8 +736,25 @@ class CopilotSyncOrchestrator {
       modified: this.changes.modified.length,
       deleted: this.changes.deleted.length,
       preserved_blocks: this.changes.preserved.reduce((sum, p) => sum + p.blocks, 0),
-      files_with_blocks: this.changes.preserved.length
+      files_with_blocks: this.changes.preserved.length,
+      conflicts: this.changes.conflicts.length
     };
+
+    let conflictSection = '';
+    if (this.changes.conflicts.length > 0) {
+      conflictSection = `
+### ⚠️ Protected Block Warnings
+
+The following files have protected blocks that may need manual review:
+
+${this.changes.conflicts.map(c => {
+  const warningDetails = c.warnings.map(w => `  - **${w.type}**: ${w.message}`).join('\n');
+  return `**\`${c.file}\`**\n${warningDetails}`;
+}).join('\n\n')}
+
+**Action Required**: Please review these files carefully. Main-app may have removed or significantly changed code that was protected in demo-app.
+`;
+    }
 
     const description = `## 🤖 Automated Demo Sync
 
@@ -583,7 +765,8 @@ This PR synchronizes changes from \`main-app\` to \`demo-app\` using AI-powered 
 - **Modified**: ${summary.modified} files
 - **Deleted**: ${summary.deleted} files
 - **Protected Blocks Preserved**: ${summary.preserved_blocks} blocks in ${summary.files_with_blocks} files
-
+${summary.conflicts > 0 ? `- **⚠️ Files with Warnings**: ${summary.conflicts}\n` : ''}
+${conflictSection}
 ### 📝 Detailed Changes
 
 #### ✅ Added Files
