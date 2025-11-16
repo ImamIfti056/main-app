@@ -162,17 +162,19 @@ jobs:
         run: |
           cd demo-app
           
+          ISSUE_BODY="The automated demo sync workflow failed.
+          
+          **Main app commit**: ${GITHUB_SHA}
+          **Workflow run**: [#${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
+          **Branch**: main
+          
+          Please review the workflow logs and fix any issues.
+          
+          /cc @demo-team"
+          
           gh issue create \
             --title "🚨 Demo sync failed - Run #${GITHUB_RUN_ID}" \
-            --body "The automated demo sync workflow failed.
-
-**Main app commit**: ${GITHUB_SHA}
-**Workflow run**: [#${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
-**Branch**: main
-
-Please review the workflow logs and fix any issues.
-
-/cc @demo-team" \
+            --body "$ISSUE_BODY" \
             --label "sync-failure,automated"
 
       # Step 11: Job summary
