@@ -335,7 +335,20 @@ class CopilotSyncOrchestrator {
       return;
     }
 
-    // Merge: use main content but restore protected blocks
+    // Check if main-app also has protected block markers
+    const startMarkers = this.config.protected_blocks.start_markers;
+    const hasMarkersInMain = startMarkers.some(marker => mainContent.includes(marker));
+
+    if (!hasMarkersInMain) {
+      // Main doesn't have protected blocks, meaning main-app dev removed them
+      // Use main content as-is (don't preserve demo blocks)
+      fs.writeFileSync(demoPath, mainContent);
+      console.log(`   ✓ Smart merge (blocks removed from main, using main content): ${file}`);
+      this.syncLog.push({ action: 'smart_merge_blocks_removed', file });
+      return;
+    }
+
+    // Both have protected blocks, merge them
     const mergedContent = this.mergeWithProtectedBlocks(mainContent, protectedBlocks);
     
     fs.writeFileSync(demoPath, mergedContent);
@@ -390,6 +403,8 @@ class CopilotSyncOrchestrator {
    * Merge main content with protected blocks from demo
    */
   mergeWithProtectedBlocks(mainContent, protectedBlocks) {
+    // Both main and demo have protected blocks
+    // Match them up and replace main's blocks with demo's blocks
     const mainLines = mainContent.split('\n');
     const startMarkers = this.config.protected_blocks.start_markers;
     const endMarkers = this.config.protected_blocks.end_markers;
