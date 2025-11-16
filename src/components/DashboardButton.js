@@ -3,9 +3,10 @@ export function DashboardButton() {
     <>
       <button className="dashboard-btn">
           Go to Dashboard →
+          <p>inside intentional block : this line should not be detected as changed</p>
       </button>
 
-      <h3>new feature in main appaa</h3>
+      <p>this line should be detected as changed</p>
     </>
   );
 }
