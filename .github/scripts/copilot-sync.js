@@ -55,8 +55,8 @@ class CopilotSyncOrchestrator {
       smart_merge_files: ['src/**/*.js', 'src/**/*.jsx'],
       full_copy_files: ['src/styles/**/*.css'],
       protected_blocks: {
-        start_markers: ['// INTENTIONAL-START'],
-        end_markers: ['// INTENTIONAL-END']
+        start_markers: ['{/* DEMO-INTENTIONAL-START */}'],
+        end_markers: ['{/* DEMO-INTENTIONAL-END */}']
       },
       auto_detect_patterns: {
         disabled_buttons: ['disabled={true}'],
