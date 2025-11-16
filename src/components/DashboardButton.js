@@ -5,7 +5,7 @@ export function DashboardButton() {
           Go to Dashboard →
       </button>
 
-      <h3>new feature in main app</h3>
+      <h3>new feature in main appaa</h3>
     </>
   );
 }
