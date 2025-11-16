@@ -151,8 +151,10 @@ jobs:
             --title "🤖 [Auto-Sync] Demo sync from main-app (${GITHUB_SHA::7})" \
             --body "$PR_BODY" \
             --base dev \
-            --head "sync/copilot-${GITHUB_RUN_ID}" \
-            --label "automated-sync,demo-sync,needs-review"
+            --head "sync/copilot-${GITHUB_RUN_ID}" || true
+          
+          # Try to add labels (don't fail if labels don't exist)
+          gh pr edit "sync/copilot-${GITHUB_RUN_ID}" --add-label "automated-sync,demo-sync,needs-review" 2>/dev/null || echo "⚠️  Could not add labels (labels may not exist in repo)"
 
       # Step 10: Create issue on failure
       - name: Create issue on sync failure
@@ -174,8 +176,13 @@ jobs:
           
           gh issue create \
             --title "🚨 Demo sync failed - Run #${GITHUB_RUN_ID}" \
-            --body "$ISSUE_BODY" \
-            --label "sync-failure,automated"
+            --body "$ISSUE_BODY" || true
+          
+          # Try to add labels (don't fail if labels don't exist)
+          ISSUE_NUMBER=$(gh issue list --limit 1 --json number --jq '.[0].number')
+          if [ -n "$ISSUE_NUMBER" ]; then
+            gh issue edit "$ISSUE_NUMBER" --add-label "sync-failure,automated" 2>/dev/null || echo "⚠️  Could not add labels"
+          fi
 
       # Step 11: Job summary
       - name: Generate job summary
