@@ -1,4 +1,4 @@
-name: Sync Demo with Main via LLM
+name: Sync Demo with Main via Copilot
 
 on:
   push:
@@ -9,128 +9,220 @@ jobs:
   sync-demo:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write
+      pull-requests: write
+
     env:
       DEMO_REPO_TOKEN: ${{ secrets.DEMO_REPO_TOKEN }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       IGNORE_PATHS: "src/pages/**,src/demo-specific/**"
 
     steps:
-      # Step 1: Checkout main-app (full history to avoid diff errors)
+      # Step 1: Checkout main-app
       - name: Checkout main-app
         uses: actions/checkout@v4
         with:
           path: main-app
-          fetch-depth: 0
 
       # Step 2: Checkout demo-app
       - name: Checkout demo-app
         uses: actions/checkout@v4
         with:
-          repository: ImamIfti056/demo-app
+          repository: ifti56/demo-app
           token: ${{ secrets.DEMO_REPO_TOKEN }}
           path: demo-app
-          fetch-depth: 0
 
-      # Step 3: Generate main changes diff
+      # Step 3: Generate surgical diff of changed lines only
       - name: Generate main changes diff
+        id: generate-diff
         run: |
           cd main-app
-          git fetch origin main
-          git diff origin/main^..origin/main --unified=0 > ../main_changes.diff
-          cat ../main_changes.diff
+          # Fetch full history including all commits and tags
+          git fetch --deepen=999999 origin main || git fetch origin main
+          
+          # Use HEAD and HEAD~1 (last two commits)
+          BEFORE="HEAD~1"
+          AFTER="HEAD"
+          
+          echo "--- DIFF DEBUG ---"
+          echo "BEFORE: $BEFORE"
+          echo "AFTER:  $AFTER"
+          echo "Total commits on main:"
+          git rev-list --count origin/main
+          echo "Commit info for BEFORE:"
+          git show --no-patch --format="%H %ci %s" $BEFORE 2>/dev/null || echo "(BEFORE unavailable)"
+          echo "Commit info for AFTER:"
+          git show --no-patch --format="%H %ci %s" $AFTER 2>/dev/null || echo "(AFTER unavailable)"
 
-      # Step 4: Setup Python and install dependencies
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
+          # Limit the diff to source files only to avoid applying workflow or config files
+          git diff "$BEFORE" "$AFTER" --unified=0 -- src > ../main_changes.diff || true
+          git diff --name-only "$BEFORE" "$AFTER" -- src > ../main_changed_files.txt || true
+          echo "Changed files (limited to src/):"
+          cat ../main_changed_files.txt || true
+          echo "Diff between $BEFORE and $AFTER (src/):"
+          cat ../main_changes.diff || true
+          echo "--- END DIFF DEBUG ---"
 
-      - name: Install dependencies
+      # Step 4: Apply changes to demo-app using git apply
+      - name: Apply changes to demo-app
+        id: apply-changes
         run: |
-          python -m pip install --upgrade pip
-          pip install requests openai jq
+          cd demo-app
+          # Check if diff file has content
+          if [ ! -s ../main_changes.diff ]; then
+            echo "changes_made=false" >> $GITHUB_OUTPUT
+            echo "ℹ No changes to apply (branches are identical)"
+            exit 0
+          fi
+          
+          echo "changes_made=true" >> $GITHUB_OUTPUT
+          
+          # Get list of new files (added) from main-app
+          NEW_FILES=$(cd ../main-app && git diff HEAD~1 HEAD --name-only --diff-filter=A -- src 2>/dev/null || true)
+          
+          if [ ! -z "$NEW_FILES" ]; then
+            echo "📄 New files detected:"
+            echo "$NEW_FILES"
+            # Copy new files from main-app to demo-app
+            for FILE in $NEW_FILES; do
+              mkdir -p "$(dirname "$FILE")"
+              cp "../main-app/$FILE" "$FILE"
+              echo "  ✓ Copied $FILE"
+            done
+          fi
+          
+          # Get list of modified files (exclude new files) from main-app
+          MODIFIED_FILES=$(cd ../main-app && git diff HEAD~1 HEAD --name-only --diff-filter=M -- src 2>/dev/null || true)
+          
+          if [ ! -z "$MODIFIED_FILES" ]; then
+            echo "✏️ Modified files detected:"
+            echo "$MODIFIED_FILES"
+            
+            # For each modified file, copy the latest version from main-app into demo-app,
+            # but preserve any INTENTIONAL-START/END blocks from the existing demo file.
+            for FILE in $MODIFIED_FILES; do
+              echo "⟳ Syncing modified file: $FILE"
 
-      # Step 5: Call OpenAI to generate patched files (new 1.x API)
-      - name: Generate patched files via Vercel AI
-        run: |
-          python3 - <<PY
-          import os, json, requests
-          
-          VERCEL_AI_URL = "https://vite-react-alpha-two-2rwal6v0ex.vercel.app/api/ai"
-          
-          with open("main_changes.diff", "r") as f:
-            diff_text = f.read()
-          
-          prompt = f"""
-          You are a coding assistant.
-          You have the diff of main-app in 'main_changes.diff' and the full demo-app source.
-          Task:
-          1. Apply only the diff changes to demo-app files.
-          2. Preserve intentional demo differences marked with:
-           /* DEMO-INTENTIONAL-START */ ... /* DEMO-INTENTIONAL-END */
-          3. Do not modify files matching ignore list: {os.environ['IGNORE_PATHS']}
-          4. Output JSON in this format:
-           {{ "files": [ {{ "path": "<relative-path>", "new_content": "<updated content>", "note": "<optional note>" }} ] }}
-          
-          Diff:
-          {diff_text}
-          """
-          
-          payload = {
-            "messages": [
-                {"role": "system", "content": "You are a skilled coding assistant."},
-                {"role": "user", "content": prompt}
-            ],
-            "model": "gpt-4.1-mini"
-          }
-          
-          resp = requests.post(VERCEL_AI_URL, json=payload)
-          resp.raise_for_status()
-          
-          result = resp.json()["choices"][0]["message"]["content"]
-          
-          with open("llm_output.json", "w") as f:
-            f.write(result)
+              HAS_INTENTIONAL=false
+              if [ -f "$FILE" ] && grep -q 'INTENTIONAL-START' "$FILE"; then
+                HAS_INTENTIONAL=true
+                mkdir -p "../demo-app_backups/$(dirname "$FILE")"
+                cp "$FILE" "../demo-app_backups/$FILE"
+              fi
+
+              # Copy latest file contents from main-app
+              mkdir -p "$(dirname "$FILE")"
+              cp "../main-app/$FILE" "$FILE"
+
+              # If there was an intentional block in the original demo file, restore it
+              if [ "$HAS_INTENTIONAL" = true ]; then
+                BACKUP="../demo-app_backups/$FILE"
+                if [ -f "$BACKUP" ]; then
+                  TARGET_FILE="$FILE" BACKUP_FILE="$BACKUP" python - << 'PY'
+                  import os
+
+                  file_path = os.environ["TARGET_FILE"]
+                  backup_path = os.environ["BACKUP_FILE"]
+
+                  with open(file_path, "r", encoding="utf-8") as f:
+                      new_lines = f.readlines()
+
+                  with open(backup_path, "r", encoding="utf-8") as f:
+                      orig_lines = f.readlines()
+
+
+                  def restore_blocks(new, orig):
+                      result = []
+                      i_new = 0
+                      i_orig = 0
+                      n_new = len(new)
+                      n_orig = len(orig)
+
+                      while i_new < n_new:
+                          line_new = new[i_new]
+                          if "INTENTIONAL-START" in line_new:
+                              # Find corresponding block in original file
+                              start_o = None
+                              for j in range(i_orig, n_orig):
+                                  if "INTENTIONAL-START" in orig[j]:
+                                      start_o = j
+                                      break
+
+                              if start_o is None:
+                                  # No corresponding block in original; keep new block as-is
+                                  result.append(line_new)
+                                  i_new += 1
+                                  continue
+
+                              # Collect original block (from START to END inclusive)
+                              block = []
+                              k = start_o
+                              while k < n_orig:
+                                  block.append(orig[k])
+                                  if "INTENTIONAL-END" in orig[k]:
+                                      k += 1
+                                      break
+                                  k += 1
+
+                              # Append original block to result
+                              result.extend(block)
+                              i_orig = k
+
+                              # Skip corresponding block in new file
+                              i_new += 1
+                              while i_new < n_new:
+                                  if "INTENTIONAL-END" in new[i_new]:
+                                      i_new += 1
+                                      break
+                                  i_new += 1
+                          else:
+                              result.append(line_new)
+                              i_new += 1
+
+                      return result
+
+
+                  restored = restore_blocks(new_lines, orig_lines)
+
+                  with open(file_path, "w", encoding="utf-8") as f:
+                      f.writelines(restored)
           PY
+                fi
+              fi
+            done
+          fi
 
-
-      # Step 6: Apply patched files to demo-app
-      - name: Apply patched files
-        run: |
-          cat llm_output.json | jq -c '.files[]' | while read file; do
-            path=$(echo "$file" | jq -r '.path')
-            content=$(echo "$file" | jq -r '.new_content')
-            mkdir -p $(dirname demo-app/$path)
-            echo "$content" > demo-app/$path
-          done
-
-      # Step 7: Commit changes
+      # Step 5: Commit changes to new branch in demo-app
       - name: Commit changes
+        if: steps.apply-changes.outputs.changes_made == 'true'
         run: |
           cd demo-app
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b sync/llm-auto-${GITHUB_RUN_ID}
+          git checkout -b sync/auto-${GITHUB_RUN_ID}
           git add .
-          # Only commit if changes exist
-          git diff --cached --quiet || git commit -m "chore(sync): LLM auto-sync from main-app (${GITHUB_SHA::7})"
+          git commit -m "chore(sync): Auto-sync from main-app (${GITHUB_SHA::7})" || echo "No changes to commit"
 
-      # Step 8: Push branch
+      # Step 6: Push branch to demo-app
       - name: Push branch
+        if: steps.apply-changes.outputs.changes_made == 'true'
         run: |
           cd demo-app
           git push origin HEAD
 
-      # Step 9: Create Pull Request
+      # Step 7: Create Pull Request
       - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v6
-        with:
-          path: demo-app
-          branch: sync/llm-auto-${GITHUB_RUN_ID}
-          title: "LLM: Automated Demo Sync"
-          body: |
-            This PR was automatically generated by an LLM to sync demo-app with main-app.
-            Main commit: ${{ github.sha }}
-            - Files synced from main-app changes
-            - Intentional differences preserved
-            - Files in ignore list skipped
+        if: steps.apply-changes.outputs.changes_made == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.DEMO_REPO_TOKEN }}
+        run: |
+          cd demo-app
+          gh pr create \
+            --title "chore(sync): Automated Demo Sync" \
+            --body "This PR was automatically generated to sync demo-app with main-app.
+          
+          Main commit: ${{ github.sha }}
+          - Applied changes from main-app
+          - Files in ignore list skipped" \
+            --base main \
+            --head sync/auto-${GITHUB_RUN_ID}
