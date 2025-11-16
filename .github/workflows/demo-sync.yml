@@ -150,7 +150,7 @@ jobs:
           gh pr create \
             --title "🤖 [Auto-Sync] Demo sync from main-app (${GITHUB_SHA::7})" \
             --body "$PR_BODY" \
-            --base dev \
+            --base main \
             --head "sync/copilot-${GITHUB_RUN_ID}" || true
           
           # Try to add labels (don't fail if labels don't exist)
