@@ -4,6 +4,7 @@ export default function UserCard({ user }) {
           <img src={user.avatar} className="avatar" />
           <h3>{user.name}</h3>
           <p className="role">{user.role}</p>
+          <p>new line added for test</p>
       </div>
   );
 }
