@@ -81,12 +81,20 @@ protected_blocks:
     - "<!-- INTENTIONAL-START -->"
     - "/* INTENTIONAL-START */"
     - "# INTENTIONAL-START"
+    - "// DEMO-INTENTIONAL-START"
+    - "{/* DEMO-INTENTIONAL-START */}"
+    - "<!-- DEMO-INTENTIONAL-START -->"
+    - "/* DEMO-INTENTIONAL-START */"
   
   end_markers:
     - "// INTENTIONAL-END"
     - "<!-- INTENTIONAL-END -->"
     - "/* INTENTIONAL-END */"
     - "# INTENTIONAL-END"
+    - "// DEMO-INTENTIONAL-END"
+    - "{/* DEMO-INTENTIONAL-END */}"
+    - "<!-- DEMO-INTENTIONAL-END -->"
+    - "/* DEMO-INTENTIONAL-END */"
 
 # AI-powered auto-detection patterns
 # Copilot will identify these patterns as likely demo-specific and preserve them
